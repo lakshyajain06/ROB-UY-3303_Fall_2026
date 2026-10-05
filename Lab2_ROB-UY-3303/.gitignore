@@ -1,0 +1,13 @@
+# Recorded odometry data (generated during robot experiments)
+odom_log_*.csv
+200_150_25/
+200_170_25/
+150_170_25/
+
+# Generated plot images
+assignment02_square_plot.png
+repeatability_*.png
+
+# Python bytecode cache
+__pycache__/
+*.py[cod]

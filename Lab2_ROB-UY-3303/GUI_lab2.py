@@ -85,7 +85,7 @@ csv_writer = None
 TICKS_PER_REV_LEFT = 3236.0/9.0  # TODO: your measured ticks per revolution, LEFT wheel (encoder A)
 TICKS_PER_REV_RIGHT =5075.0/14.0# TODO: your measured ticks per revolution, RIGHT wheel (encoder B)
 WHEEL_RADIUS_M = 0.067/2.0      # TODO: replace with your measured value (float, meters)
-WHEELBASE_M = 0.0255     # TODO: replace with your measured value (float, meters)
+WHEELBASE_M = 0.206     # TODO: replace with your measured value (float, meters)
 
 # --- ODOMETRY STATE ---
 # robot_state holds [x, y, theta] in meters and radians (global frame).
