@@ -64,10 +64,10 @@ csv_writer = None
 # =====================================================================
 # STUDENT TODO - ROBOT CONSTANTS (your Lab 2 values, same as in lab_3.py)
 # =====================================================================
-TICKS_PER_REV_LEFT = None     # left wheel (encoder A)
-TICKS_PER_REV_RIGHT = None    # right wheel (encoder B)
-WHEEL_RADIUS_M = None          # m
-WHEELBASE_M = None          # m, distance between the wheels (= 2L)
+TICKS_PER_REV_LEFT = 3236.0/9.0    # left wheel (encoder A)
+TICKS_PER_REV_RIGHT = 5075.0/14.0    # right wheel (encoder B)
+WHEEL_RADIUS_M = 0.067/2.0         # m
+WHEELBASE_M = 0.206          # m, distance between the wheels (= 2L)
 
 # --- ODOMETRY STATE (Lab 2) ---
 robot_state = [0.0, 0.0, 0.0]      # [x_m, y_m, theta_rad], encoder-only estimate
@@ -82,28 +82,52 @@ odometry_path = []
 # Copy your six Lab 2 functions here (same names, inputs and outputs).
 # The GUI uses them for the odometry (yellow) and inside the particle filter.
 def get_wheel_rotation_left(enc_counts):
-    pass  # TODO: replace this with your implementation
-
+    fraction = enc_counts / TICKS_PER_REV_LEFT
+    rotation_rad = fraction * 2 * math.pi
+    return rotation_rad  # replace this with your implementation
+    
 
 def get_wheel_rotation_right(enc_counts):
-    pass  # TODO: replace this with your implementation
+    fraction = enc_counts / TICKS_PER_REV_RIGHT
+    rotation_rad = fraction * 2 * math.pi
+    return rotation_rad # replace this with your implementation
+    
 
 
 def get_wheel_distance_left(rotation_rad):
-    pass  # TODO: replace this with your implementation
+    distance = WHEEL_RADIUS_M * rotation_rad
+    return distance # replace this with your implementation
 
 
 def get_wheel_distance_right(rotation_rad):
-    pass  # TODO: replace this with your implementation
-
+    distance = WHEEL_RADIUS_M * rotation_rad
+    return distance # replace this with your implementation
+    
 
 def get_state_change(dist_right, dist_left):
-    pass  # TODO: replace this with your implementation
-
+    ds_r= dist_right
+    ds_l=dist_left
+    L=WHEELBASE_M/2.0
+    theta=robot_state[2]
+    
+    delta_s = (ds_r + ds_l) / 2
+    delta_theta = (ds_r - ds_l) / (2 * L)
+    delta_x = delta_s * math.cos(theta + delta_theta / 2)
+    delta_y = delta_s * math.sin(theta + delta_theta / 2)
+    return [delta_x, delta_y, delta_theta]
 
 def predict_robot_state(last_state, enc_right, enc_left):
-    pass  # TODO: replace this with your implementation
-
+    delta_enc_left  = enc_left  - prev_enc_a
+    delta_enc_right = enc_right - prev_enc_b
+    rot_left  = get_wheel_rotation_left(delta_enc_left)
+    rot_right = get_wheel_rotation_right(delta_enc_right)
+    dist_left  = get_wheel_distance_left(rot_left)
+    dist_right = get_wheel_distance_right(rot_right)
+    [dx, dy, dtheta] = get_state_change(dist_right, dist_left)
+    new_x     = last_state[0] + dx
+    new_y     = last_state[1] + dy
+    new_theta = last_state[2] + dtheta
+    return [new_x,new_y,new_theta]
 
 def wrap_angle(a):
     return math.atan2(math.sin(a), math.cos(a))
@@ -601,14 +625,16 @@ def stop_motors():
 # STUDENT TODO: get_calibration_pwms()
 # Return the list of positive PWM values to test, from 0 to 255.
 def get_calibration_pwms():
-    pass  # TODO: replace this with your implementation
-
+    values=[x for x in range(0,256,5)]
+    return values
 
 # STUDENT TODO: measure_wheel_speeds(delta_ticks_left, delta_ticks_right, dt)
 # The encoders counted delta_ticks_* in dt seconds.
 # Return (phi_dot_l, phi_dot_r) in rad/s, with sign.
 def measure_wheel_speeds(delta_ticks_left, delta_ticks_right, dt):
-    pass  # TODO: replace this with your implementation
+    phi_dot_r = get_wheel_rotation_right(delta_ticks_right)/dt
+    phi_dot_l = get_wheel_rotation_left(delta_ticks_left)/dt
+    return phi_dot_l, phi_dot_r
 
 
 # PROVIDED - calibration routine and CSV saving (do not change)
@@ -784,7 +810,11 @@ def pwm_to_speed(wheel, pwm):
 #   cal_table[(wheel, -1)]  backward: same, with |pwm| and |speed|
 # Return 0 if |phi| is below the lowest speed the wheel reaches.
 def speed_to_pwm(wheel, phi):
-    pass  # TODO: replace this with your implementation
+    if phi == 0 or not cal_table:
+        return 0
+    t = cal_table[(wheel, 1 if phi > 0 else -1)]
+    return math.copysign(_interp(abs(phi),[v for _, v in t],[p for p,_ in t]),phi)
+    
 
 
 # PROVIDED - pulses (do not change): speeds too low for the wheel are sent
