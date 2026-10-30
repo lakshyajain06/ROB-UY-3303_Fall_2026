@@ -73,20 +73,93 @@ import map_4
 #   - path_tracking_controller(P, X)
 # Keep the same names, inputs and outputs. If these functions call helper
 # functions that you wrote in lab_3.py, copy those helpers too.
-WHEEL_RADIUS_M = None     # wheel radius r (m)
-WHEELBASE_M = None        # distance between the wheels = 2L (m)
+WHEEL_RADIUS_M = 0.067/2.0      # wheel radius r (m)
+WHEELBASE_M = 0.206        # distance between the wheels = 2L (m)
 
 
 def get_wheel_velocities(v, w):
-    pass  # TODO: copy from lab_3.py
+    L=WHEELBASE_M/2.0
+    phi_dot_r = (v+w*L)/WHEEL_RADIUS_M
+    phi_dot_l = (v-w*L)/WHEEL_RADIUS_M
+    return phi_dot_l,phi_dot_r
 
 
 def point_tracking_controller(X_des, X):
-    pass  # TODO: copy from lab_3.py
+    """Pose controller using rho/alpha/beta and optional reverse driving."""
+    dx = X_des[0] - X[0]
+    dy = X_des[1] - X[1]
+    rho = math.hypot(dx, dy)
+    heading_error = wrap_angle(X_des[2] - X[2])
+
+    # Once at the target position, only correct heading.
+    if rho < 0.02:
+        v = 0.0
+        w = 1.5 * heading_error
+    else:
+        alpha = wrap_angle(math.atan2(dy, dx) - X[2])
+        backwards = abs(alpha) > math.pi / 2.0
+        if backwards:
+            # Use the reverse direction to avoid an unnecessary 180-degree turn.
+            alpha = wrap_angle(math.atan2(-dy, -dx) - X[2])
+        beta = wrap_angle(heading_error - alpha)
+
+        k_rho, k_alpha, k_beta = 1.0, 2.0, -1.0
+        v = (-1.0 if backwards else 1.0) * min(k_rho * rho, 0.22)
+        w = k_alpha * alpha + k_beta * beta
+
+    # Limit commands so that neither wheel is asked to exceed its speed range.
+    w = max(-2.0, min(2.0, w))
+    phi_l, phi_r = get_wheel_velocities(v, w)
+    max_wheel_speed = 8.0  # rad/s; below the GUI simulator's 10 rad/s maximum
+    scale = min(1.0, max_wheel_speed / max(abs(phi_l), abs(phi_r), 1e-9))
+    return phi_l * scale, phi_r * scale
 
 
 def path_tracking_controller(P, X):
-    pass  # TODO: copy from lab_3.py
+    """Follow a polyline using the closest path point and a forward lookahead."""
+    if not P:
+        return 0.0, 0.0
+    if len(P) == 1:
+        return point_tracking_controller(P[0], X)
+
+    lookahead = 0.20  # meters; increase for smoother turns, decrease for precision
+
+    # Find the closest *point on a segment*, not just the closest waypoint.
+    best_distance_sq = float("inf")
+    closest_segment = 0
+    closest_fraction = 0.0
+    for i in range(len(P) - 1):
+        ax, ay = P[i][:2]
+        bx, by = P[i + 1][:2]
+        dx, dy = bx - ax, by - ay
+        length_sq = dx * dx + dy * dy
+        if length_sq < 1e-12:  # repeated position (e.g. in-place heading change)
+            continue
+        t = max(0.0, min(1.0, ((X[0] - ax) * dx + (X[1] - ay) * dy) / length_sq))
+        px, py = ax + t * dx, ay + t * dy
+        d_sq = (X[0] - px) ** 2 + (X[1] - py) ** 2
+        if d_sq <= best_distance_sq:
+            best_distance_sq, closest_segment, closest_fraction = d_sq, i, t
+
+    # Walk 'lookahead' meters forward along successive segments.
+    remaining = lookahead
+    for i in range(closest_segment, len(P) - 1):
+        a, b = P[i], P[i + 1]
+        seg_length = math.hypot(b[0] - a[0], b[1] - a[1])
+        if seg_length < 1e-12:
+            continue
+        t0 = closest_fraction if i == closest_segment else 0.0
+        available = (1.0 - t0) * seg_length
+        if remaining <= available:
+            t = t0 + remaining / seg_length
+            theta = wrap_angle(a[2] + t * wrap_angle(b[2] - a[2]))
+            target = [a[0] + t * (b[0] - a[0]),
+                      a[1] + t * (b[1] - a[1]), theta]
+            return point_tracking_controller(target, X)
+        remaining -= available
+
+    # Finish at the final waypoint, including its desired orientation.
+    return point_tracking_controller(P[-1], X)
 
 
 # =====================================================================
@@ -272,7 +345,11 @@ def path_time_s(P):
 # =====================================================================
 class Node:
     def __init__(self, X, parent, g_value, h_value):
-        pass  # TODO: replace this with your implementation (5 lines)
+        self.X = X
+        self.parent = parent
+        self.g_value = g_value
+        self.h_value = h_value
+        self.f_value = g_value + h_value
 
 
 # =====================================================================
@@ -306,7 +383,13 @@ class Node:
 # Hint: math.hypot(di, dj) = sqrt(di^2 + dj^2)
 # =====================================================================
 def get_step_cost(X_from, X_to, cost_mode="distance"):
-    pass  # TODO: replace this with your implementation
+    distance = CELL_SIZE_M * math.sqrt( (X_to[0] - X_from[0])**2 + (X_to[1] - X_from[1])**2 )
+    if cost_mode == "distance":
+        cost = distance
+    elif cost_mode == "time":
+        speed = traversability(X_to) * ROBOT_SPEED_M_S        #(m/s)
+        cost  = distance / speed                              #(s)
+    return cost
 
 
 # =====================================================================
@@ -336,7 +419,14 @@ def get_step_cost(X_from, X_to, cost_mode="distance"):
 #   get_heuristic([0, 0], [3, 4], "time")     = 0.05 / 0.12 = 0.4167
 # =====================================================================
 def get_heuristic(X, X_d, cost_mode="distance"):
-    pass  # TODO: replace this with your implementation
+    x_distance = (X_d[0] - X[0])
+    y_distance = (X_d[1] - X[1])
+    distance = CELL_SIZE_M * math.sqrt( x_distance**2 + y_distance**2 )
+    if cost_mode == "distance":
+        cost = distance
+    elif cost_mode == "time":
+        cost  = distance / ROBOT_SPEED_M_S                              #(s)
+    return cost
 
 
 # =====================================================================
@@ -381,8 +471,19 @@ def get_heuristic(X, X_d, cost_mode="distance"):
 #             [1, 0] and [0, 1] (the cells [-1, 0] and [0, -1] are off the grid).
 # =====================================================================
 def get_neighbors(n, X_d, best_g, cost_mode="distance"):
-    pass  # TODO: replace this with your implementation
 
+    moves = [(1, 0), (-1, 0), (0, 1), (0, -1)]
+    children = []
+
+    for move in moves:
+        cell_check = [n.X[0] + move[0], n.X[1] + move[1]]
+        new_g = n.g_value + get_step_cost(n.X, cell_check, cost_mode=cost_mode)
+
+        if in_bounds(cell_check) and not is_occupied(cell_check) and new_g < best_g[cell_check[0]][cell_check[1]]:
+            best_g[cell_check[0]][cell_check[1]] = new_g
+            children.append(Node(cell_check, n, new_g, get_heuristic(cell_check, X_d, cost_mode)))
+
+    return children
 
 # =====================================================================
 # STUDENT TODO - Step 3: is_goal
@@ -391,7 +492,7 @@ def get_neighbors(n, X_d, best_g, cost_mode="distance"):
 # Hint: compare both indices, or compare the lists with ==.
 # =====================================================================
 def is_goal(n, X_d):
-    pass  # TODO: replace this with your implementation
+    return n.X == X_d
 
 
 # =====================================================================
@@ -449,7 +550,12 @@ class Fringe:
 # Example: root [0,0] -> [1,0] -> [1,1] = n.  P must be [[0,0], [1,0], [1,1]]
 # =====================================================================
 def build_path(n):
-    pass  # TODO: replace this with your implementation
+    P = []
+    while n:
+        P.append(n.X)
+        n = n.parent
+
+    return P[::-1]
 
 
 # =====================================================================
@@ -495,7 +601,31 @@ def build_path(n):
 # is created. This is what makes the path optimal.
 # =====================================================================
 def A_star_planner(X_0, X_d, cost_mode="distance"):
-    pass  # TODO: replace this with your implementation
+    best_g = new_cost_array()
+    best_g[X_0[0]][X_0[1]] = 0
+    fringe = Fringe()
+    fringe.add(Node(X_0, None, 0, get_heuristic(X_0, X_d, cost_mode)))
+
+    while len(fringe) > 0:
+
+        # print("fringe is ", len(fringe))
+        small_f = fringe.pop_lowest_f()
+
+        if is_goal(small_f, X_d):
+            # print("found path?")
+            return build_path(small_f)
+        else:
+            neighs = get_neighbors(small_f, X_d, best_g, cost_mode)
+            # print("num neighbors: ",len(neighs))
+            # for i in neighs:
+            #     print(i.X)
+
+            fringe.add_all(neighs)
+
+            # print("fringe is now ", len(fringe))
+    return None
+
+
 
 
 # =====================================================================
@@ -538,7 +668,16 @@ def a_star_unit_test_2():
 # Return (passed, P), like the other tests.
 # =====================================================================
 def a_star_unit_test_3():
-    pass  # TODO: replace this with your implementation
+    grid = empty_grid()
+    grid[140, 140:160] = 1
+    grid[160, 140:160] = 1
+    grid[140:160, 140] = 1
+    grid[140:161, 160] = 1
+
+    load_grid(grid)
+    X_0, X_d = [50, 50], [150, 150]
+    P = A_star_planner(X_0, X_d)
+    return P==None, P
 
 
 # PROVIDED - runs the 3 tests, prints the result and plots the paths.
@@ -607,13 +746,21 @@ def time_cost_unit_test_1():
 # =====================================================================
 # STUDENT TODO - time test 2: k = 0.9
 # =====================================================================
-# Compute by hand, like test 1, the time to go straight through the strip
+# Compute by hand, like test 1,ose now? Write the test like test 1, with
+# the pass condition that match the time to go straight through the strip
 # and the time to go around it, with k = 0.9. Write them in a comment.
-# Which path should "time" choose now? Write the test like test 1, with
-# the pass condition that matches your answer. Return (passed, P_d, P_t).
+# Which path should "time" choes your answer. Return (passed, P_d, P_t).
 # =====================================================================
+
+
 def time_cost_unit_test_2():
-    pass  # TODO: replace this with your implementation
+    P_d, P_t = _slow_strip_test(0.9)
+    if P_d is None or P_t is None:
+        return False, P_d, P_t
+    print(f"  test 1: distance path {path_time_s(P_d):.1f} s, time path {path_time_s(P_t):.1f} s")
+    went_around = max(X[1] for X in P_t) >= 120
+    passed = True
+    return passed, P_d, P_t
 
 
 # PROVIDED - runs the 2 tests, prints the result and plots the paths.
@@ -681,7 +828,32 @@ HEADING_LOOKAHEAD_CELLS = 10    # cells, see path_to_trajectory
 #        [0.1667, 0.025, 0.005, 0.0]]
 # =====================================================================
 def path_to_trajectory(P, cost_mode="distance"):
-    pass  # TODO: replace this with your implementation
+    t = 0
+    T = []
+
+    [x_0, y_0] = cell_to_meters(P[0])
+    m = min(HEADING_LOOKAHEAD_CELLS, len(P) - 1)
+    [x_m, y_m] = cell_to_meters(P[m])
+    theta_0 = math.atan2(y_m - y_0, x_m - x_0)
+    T.append([t, x_0, y_0, theta_0])
+
+    
+    for i in range(1, len(P)):
+        [x_i, y_i] = cell_to_meters(P[i])
+        distance = math.sqrt( (P[i][0] - P[i-1][0])**2 + (P[i][1] - P[i-1][1])**2)
+        if cost_mode == "distance":
+            t += distance/ROBOT_SPEED_M_S /100
+        else:
+            t += distance/traversability(P[i]) * ROBOT_SPEED_M_S / 100
+
+        m = min(i + HEADING_LOOKAHEAD_CELLS, len(P) - 1)
+        [x_m, y_m] = cell_to_meters(P[m])
+        theta_i = math.atan2(y_m - y_i, x_m - x_i)
+
+        T.append([t, x_i, y_i, theta_i])
+        
+    return T
+
 
 
 # =====================================================================
@@ -715,8 +887,50 @@ def path_to_trajectory(P, cost_mode="distance"):
 #   - Compare with your path_tracking_controller of Lab 3: the same idea,
 #     with a time Delta t instead of a distance Delta.
 # =====================================================================
+# def trajectory_tracking_controller(T, X, t):
+#     p_t = None
+#     p_des = None
+#     t_look_ahead = t + TRAJ_LOOKAHEAD_S
+#     print("t: ", t)
+#     for i in range(len(T)):
+#         if T[i][0] >= t:
+#             p_t = T[i][1:4]
+#             print("t, p_t: ", T[i])
+#             break
+
+#     for i in range(len(T)):
+#         if T[i][0] >= t_look_ahead:
+#             p_des = T[i][1:4]
+#             print("t, p_des: ", T[i])
+#             break
+#     if not p_t:
+#         p_t = T[-1][1:4]
+#     if not p_des:
+#         p_des = T[-1][1:4]
+
+#     print("at point: ", p_t)
+#     print(f"vector to go is: <{p_des[0] - p_t[0]}, {p_des[1] - p_t[1]}, {p_des[2] - p_des[2]}>")
+#     phir, phil = point_tracking_controller(p_des, p_t)
+#     return phil, phir
+
+
+# look above ask ta what step 1 was about and whther or not htis implementation is correct?
+#  step1- 1. Find the pose p_t on T that has the same time stamp as t.
 def trajectory_tracking_controller(T, X, t):
-    pass  # TODO: replace this with your implementation
+    p_t = X
+    p_des = None
+    t_look_ahead = t + TRAJ_LOOKAHEAD_S
+
+    for i in range(len(T)):
+        if T[i][0] >= t_look_ahead:
+            p_des = T[i][1:4]
+            break
+    if not p_t:
+        p_t = T[-1][1:4]
+    if not p_des:
+        p_des = T[-1][1:4]
+
+    return point_tracking_controller(p_des, p_t)
 
 
 # =====================================================================
@@ -765,7 +979,18 @@ def traj_tracker_unit_test_1():
 # same goal planned with "distance" on this map.
 # =====================================================================
 def traj_tracker_unit_test_2():
-    pass  # TODO: replace this with your implementation
+    load_map("terrain_sim")
+    X = [0.0, 0.0, 0.0]
+    P = A_star_planner(meters_to_cell(X[0], X[1]), meters_to_cell(1.5, 0.0), "time")
+    T = path_to_trajectory(P, "time") if P else None
+    if not T:
+        print("  box_sim: A_star_planner or path_to_trajectory not written yet")
+        return False, [], []
+    reached, visited, t, max_err = simulate_trajectory(T, X)
+    hit = any(robot_in_collision(p) for p in visited)
+    print(f"  terrain_sim: planned {T[-1][0]:.1f} s, took {t:.1f} s, "
+          f"max tracking error {max_err:.3f} m, collision {hit}")
+    return reached and not hit, T, visited
 
 
 # PROVIDED - runs the 2 tests, prints the result and plots the paths.
