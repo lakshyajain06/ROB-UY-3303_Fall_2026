@@ -840,15 +840,19 @@ def path_to_trajectory(P, cost_mode="distance"):
     
     for i in range(1, len(P)):
         [x_i, y_i] = cell_to_meters(P[i])
-        distance = math.sqrt( (P[i][0] - P[i-1][0])**2 + (P[i][1] - P[i-1][1])**2)
+        distance = CELL_SIZE_M * math.sqrt(
+            (P[i][0] - P[i-1][0]) ** 2 + (P[i][1] - P[i-1][1]) ** 2)
         if cost_mode == "distance":
-            t += distance/ROBOT_SPEED_M_S /100
+            t += distance / ROBOT_SPEED_M_S
         else:
-            t += distance/traversability(P[i]) * ROBOT_SPEED_M_S / 100
+            t += distance / (traversability(P[i]) * ROBOT_SPEED_M_S)
 
         m = min(i + HEADING_LOOKAHEAD_CELLS, len(P) - 1)
         [x_m, y_m] = cell_to_meters(P[m])
-        theta_i = math.atan2(y_m - y_i, x_m - x_i)
+        if m == i:
+            theta_i = T[-1][3]
+        else:
+            theta_i = math.atan2(y_m - y_i, x_m - x_i)
 
         T.append([t, x_i, y_i, theta_i])
         
