@@ -152,27 +152,34 @@ pass  # TODO: replace this with your implementation
 
 
 def point_tracking_controller(X_des, X):
-    delta_X=X_des[0]-X[0]
-    delta_Y=X_des[1]-X[1]
-    delta_THETA=wrap_angle(X_des[2]-X[2])
-    rho=math.sqrt(delta_X**2 + delta_Y**2)
+    """Pose controller using rho/alpha/beta and optional reverse driving."""
+    dx = X_des[0] - X[0]
+    dy = X_des[1] - X[1]
+    rho = math.hypot(dx, dy)
+    heading_error = wrap_angle(X_des[2] - X[2])
 
-    alpha= wrap_angle(-1.0*X[2] + math.atan2(delta_Y,delta_X))
-    beta= wrap_angle(delta_THETA - alpha)
-
-
-    k_rho=1.0
-    k_alpha=2
-    k_beta=-1
-    if alpha >= -1.0*math.pi/2.0 and alpha <= math.pi/2.0:
-        v= k_rho * rho
-        w= k_alpha * alpha + k_beta*beta
+    # Once at the target position, only correct heading.
+    if rho < 0.02:
+        v = 0.0
+        w = 1.5 * heading_error
     else:
-        alpha= wrap_angle(-1.0*X[2] + math.atan2(-1.0*delta_Y,-1.0*delta_X))
-        beta= wrap_angle(delta_THETA - alpha)
-        v= -1.0* k_rho * rho 
-        w=k_alpha * alpha +k_beta*beta
-    return get_wheel_velocities(v,w)
+        alpha = wrap_angle(math.atan2(dy, dx) - X[2])
+        backwards = abs(alpha) > math.pi / 2.0
+        if backwards:
+            # Use the reverse direction to avoid an unnecessary 180-degree turn.
+            alpha = wrap_angle(math.atan2(-dy, -dx) - X[2])
+        beta = wrap_angle(heading_error - alpha)
+
+        k_rho, k_alpha, k_beta = 1.0, 2.0, -1.0
+        v = (-1.0 if backwards else 1.0) * min(k_rho * rho, 0.22)
+        w = k_alpha * alpha + k_beta * beta
+
+    # Limit commands so that neither wheel is asked to exceed its speed range.
+    w = max(-2.0, min(2.0, w))
+    phi_l, phi_r = get_wheel_velocities(v, w)
+    max_wheel_speed = 8.0  # rad/s; below the GUI simulator's 10 rad/s maximum
+    scale = min(1.0, max_wheel_speed / max(abs(phi_l), abs(phi_r), 1e-9))
+    return phi_l * scale, phi_r * scale
 
 #GEMINI VERSION
 # def point_tracking_controller(X_des, X, k_rho=1.5, k_alpha=3.0, k_beta=-1.0):
@@ -381,23 +388,50 @@ def run_point_tracker_unit_tests(plot=True):
 
 
 def path_tracking_controller(P, X):
-    p_ct = None
-    min_dist=float('inf')
-    closest_idx=0
-    delta_D=1 
-    for i,pose in enumerate(P):
-        
-        if math.sqrt((pose[0] - X[0])**2 + (pose[1] - X[1])**2) <= min_dist:
-            min_dist=math.sqrt((pose[0] - X[0])**2 + (pose[1] - X[1])**2)
-            closest_idx=i
-    p_ct=P[closest_idx]
-    p_dest=P[-1]
+    """Follow a polyline using the closest path point and a forward lookahead."""
+    if not P:
+        return 0.0, 0.0
+    if len(P) == 1:
+        return point_tracking_controller(P[0], X)
 
-    for i in range(closest_idx,len(P)):
-        if math.sqrt((P[i][0] - p_ct[0])**2 + (P[i][1] - p_ct[1])**2) >= delta_D:
-            p_dest = P[i]
-            break
-    return point_tracking_controller(p_dest,X)
+    lookahead = 0.20  # meters; increase for smoother turns, decrease for precision
+
+    # Find the closest *point on a segment*, not just the closest waypoint.
+    best_distance_sq = float("inf")
+    closest_segment = 0
+    closest_fraction = 0.0
+    for i in range(len(P) - 1):
+        ax, ay = P[i][:2]
+        bx, by = P[i + 1][:2]
+        dx, dy = bx - ax, by - ay
+        length_sq = dx * dx + dy * dy
+        if length_sq < 1e-12:  # repeated position (e.g. in-place heading change)
+            continue
+        t = max(0.0, min(1.0, ((X[0] - ax) * dx + (X[1] - ay) * dy) / length_sq))
+        px, py = ax + t * dx, ay + t * dy
+        d_sq = (X[0] - px) ** 2 + (X[1] - py) ** 2
+        if d_sq <= best_distance_sq:
+            best_distance_sq, closest_segment, closest_fraction = d_sq, i, t
+
+    # Walk 'lookahead' meters forward along successive segments.
+    remaining = lookahead
+    for i in range(closest_segment, len(P) - 1):
+        a, b = P[i], P[i + 1]
+        seg_length = math.hypot(b[0] - a[0], b[1] - a[1])
+        if seg_length < 1e-12:
+            continue
+        t0 = closest_fraction if i == closest_segment else 0.0
+        available = (1.0 - t0) * seg_length
+        if remaining <= available:
+            t = t0 + remaining / seg_length
+            theta = wrap_angle(a[2] + t * wrap_angle(b[2] - a[2]))
+            target = [a[0] + t * (b[0] - a[0]),
+                      a[1] + t * (b[1] - a[1]), theta]
+            return point_tracking_controller(target, X)
+        remaining -= available
+
+    # Finish at the final waypoint, including its desired orientation.
+    return point_tracking_controller(P[-1], X)
 
 #GEMINI VERSION
 # def path_tracking_controller(P, X, delta_D=0.5):
