@@ -1073,7 +1073,35 @@ def random_free_cell(rng):
 # It takes about 1 minute: each plan takes up to ~1 s.
 # =====================================================================
 def run_density_analysis(plot=True):
-    pass  # TODO: replace this with your implementation
+    rng = np.random.default_rng(0)
+    densities = [0.0, 0.05, 0.10, 0.15, 0.20]
+    mean_times = []
+    mean_lengths = []
+    no_path_counts = []
+    for map_index, density in enumerate(densities):
+        oc_map = map_4.random_map(density, seed=map_index)
+        load_grid(oc_map)
+        plan_times = []
+        plan_lengths = []
+        no_path_count = 0
+        for i in range(100):
+            start = random_free_cell(rng)
+            goal = random_free_cell(rng)
+            plan_start = time.perf_counter()
+            P = A_star_planner(start, goal, "distance")
+            plan_times.append(time.perf_counter() - plan_start)
+            if P is None:
+                no_path_count += 1
+            else:
+                plan_lengths.append((len(P) - 1) * CELL_SIZE_M)
+
+        no_path_counts.append(no_path_count)
+        mean_times.append(float(np.mean(plan_times)))
+        mean_lengths.append(float(np.mean(plan_lengths)) if plan_lengths else float("nan"))
+       
+    if plot:
+        plot_density_results(densities, mean_lengths, mean_times)
+    return densities, mean_lengths, mean_times, no_path_counts
 
 
 # =====================================================================
@@ -1263,5 +1291,5 @@ if __name__ == "__main__":
     run_time_cost_unit_tests()
     print("\n=== Part 4: trajectory tracking ===")
     run_traj_tracker_unit_tests()
-    # print("\n=== Part 5: density analysis ===")   # slow: run it once for your report
-    # run_density_analysis()
+    print("\n=== Part 5: density analysis ===")   # slow: run it once for your report
+    run_density_analysis()
