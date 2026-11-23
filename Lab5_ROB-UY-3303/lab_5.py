@@ -27,20 +27,93 @@ import map_5
 # =====================================================================
 # Copy your robot constants and these three functions from lab_4.py
 # (same names, inputs and outputs). Copy any helper function they use too.
-WHEEL_RADIUS_M = None     # wheel radius r (m)
-WHEELBASE_M = None        # distance between the wheels = 2L (m)
+WHEEL_RADIUS_M = 0.067/2.0     # wheel radius r (m)
+WHEELBASE_M = 0.206        # distance between the wheels = 2L (m)
 
 
 def get_wheel_velocities(v, w):
-    pass  # TODO: copy from lab_4.py
-
+    L=WHEELBASE_M/2.0
+    phi_dot_r = (v+w*L)/WHEEL_RADIUS_M
+    phi_dot_l = (v-w*L)/WHEEL_RADIUS_M
+    return phi_dot_l,phi_dot_r
 
 def point_tracking_controller(X_des, X):
-    pass  # TODO: copy from lab_4.py
+    """Pose controller using rho/alpha/beta and optional reverse driving."""
+    dx = X_des[0] - X[0]
+    dy = X_des[1] - X[1]
+    rho = math.hypot(dx, dy)
+    heading_error = wrap_angle(X_des[2] - X[2])
+
+    # Once at the target position, only correct heading.
+    if rho < 0.02:
+        v = 0.0
+        w = 1.5 * heading_error
+    else:
+        alpha = wrap_angle(math.atan2(dy, dx) - X[2])
+        backwards = abs(alpha) > math.pi / 2.0
+        if backwards:
+            # Use the reverse direction to avoid an unnecessary 180-degree turn.
+            alpha = wrap_angle(math.atan2(-dy, -dx) - X[2])
+        beta = wrap_angle(heading_error - alpha)
+
+        k_rho, k_alpha, k_beta = 1.0, 2.0, -1.0
+        v = (-1.0 if backwards else 1.0) * min(k_rho * rho, 0.22)
+        w = k_alpha * alpha + k_beta * beta
+
+    # Limit commands so that neither wheel is asked to exceed its speed range.
+    w = max(-2.0, min(2.0, w))
+    phi_l, phi_r = get_wheel_velocities(v, w)
+    max_wheel_speed = 8.0  # rad/s; below the GUI simulator's 10 rad/s maximum
+    scale = min(1.0, max_wheel_speed / max(abs(phi_l), abs(phi_r), 1e-9))
+    return phi_l * scale, phi_r * scale
 
 
 def path_tracking_controller(P, X):
-    pass  # TODO: copy from lab_4.py
+    """Follow a polyline using the closest path point and a forward lookahead."""
+    if not P:
+        return 0.0, 0.0
+    if len(P) == 1:
+        return point_tracking_controller(P[0], X)
+
+    lookahead = 0.20  # meters; increase for smoother turns, decrease for precision
+
+    # Find the closest *point on a segment*, not just the closest waypoint.
+    best_distance_sq = float("inf")
+    closest_segment = 0
+    closest_fraction = 0.0
+    for i in range(len(P) - 1):
+        ax, ay = P[i][:2]
+        bx, by = P[i + 1][:2]
+        dx, dy = bx - ax, by - ay
+        length_sq = dx * dx + dy * dy
+        if length_sq < 1e-12:  # repeated position (e.g. in-place heading change)
+            continue
+        t = max(0.0, min(1.0, ((X[0] - ax) * dx + (X[1] - ay) * dy) / length_sq))
+        px, py = ax + t * dx, ay + t * dy
+        d_sq = (X[0] - px) ** 2 + (X[1] - py) ** 2
+        if d_sq <= best_distance_sq:
+            best_distance_sq, closest_segment, closest_fraction = d_sq, i, t
+
+    # Walk 'lookahead' meters forward along successive segments.
+    remaining = lookahead
+    for i in range(closest_segment, len(P) - 1):
+        a, b = P[i], P[i + 1]
+        seg_length = math.hypot(b[0] - a[0], b[1] - a[1])
+        if seg_length < 1e-12:
+            continue
+        t0 = closest_fraction if i == closest_segment else 0.0
+        available = (1.0 - t0) * seg_length
+        if remaining <= available:
+            t = t0 + remaining / seg_length
+            theta = wrap_angle(a[2] + t * wrap_angle(b[2] - a[2]))
+            target = [a[0] + t * (b[0] - a[0]),
+                      a[1] + t * (b[1] - a[1]), theta]
+            return point_tracking_controller(target, X)
+        remaining -= available
+
+    # Finish at the final waypoint, including its desired orientation.
+    return point_tracking_controller(P[-1], X)
+
 
 
 # =====================================================================
@@ -260,7 +333,10 @@ def check_trajectory(T, X_0, P_d):
 #             r > 0, heading change dtheta (> 0 = left turn)
 class Node:
     def __init__(self, X, parent, u):
-        pass  # TODO: replace this with your implementation
+        self.X=list(X)
+        self.t=X[3]
+        self.parent=parent
+        self.u=u
 
 
 # STUDENT TODO - Step 2: the PRM data structure.
@@ -271,18 +347,24 @@ class Node:
 # and a method add(n) that adds the node n to the road map.
 class PRM:
     def __init__(self):
-        pass  # TODO: replace this with your implementation
-
+        self.cells=[[[] for _ in range(PRM_N_CELLS)] for _ in range(PRM_N_CELLS)]
+        self.nodes=[]
+        self.nonempty=[]
     def add(self, n):
-        pass  # TODO: replace this with your implementation
-
+        i,j=prm_cell_of(n.X[0],n.X[1])
+        if not self.cells[i][j]:
+            self.nonempty.append((i,j))
+        self.cells[i][j].append(n)
+        self.nodes.append(n)
 
 # STUDENT TODO - Step 3: get_random_node(prm) -> a random node of the road
 # map. Pick a random NON-EMPTY grid cell, then a random node in that cell
 # (Kindel and Hsu, Lecture 10A), so that the tree spreads into the empty
 # parts of the map.
 def get_random_node(prm):
-    pass  # TODO: replace this with your implementation
+    i,j=random.choice(prm.nonempty)
+    return random.choice(prm.cells[i][j])
+
 
 
 # STUDENT TODO - Step 4: in_collision(n1, n2) -> True if the arc from node
@@ -290,8 +372,18 @@ def get_random_node(prm):
 # leaves the square, False otherwise. Check points along the arc, about
 # every COLLISION_STEP_M, with point_in_collision (provided).
 def in_collision(n1, n2):
-    pass  # TODO: replace this with your implementation
+    
+    _,radius,turn=n2.u
+    distance =V_MAX_M_S*(n2.t-n1.t)
+    steps=max(1,math.ceil(distance/COLLISION_STEP_M))
 
+    for k in range(steps+1):
+        traveled = distance*k/steps
+        x,y,_=pose_on_arc(n1.X,radius,turn,traveled)
+        if point_in_collision(x,y):
+            return True
+    return False
+    
 
 # STUDENT TODO - Step 5: get_random_expansion(n) -> a new Node, child of n.
 # Constant forward speed V_MAX_M_S:
@@ -301,8 +393,17 @@ def in_collision(n1, n2):
 # center of curvature). Its time stamp is t + arc length / V_MAX_M_S.
 # Do not check collisions here.
 def get_random_expansion(n):
-    pass  # TODO: replace this with your implementation
-
+    if random.random() <0.15:
+        radius,turn=math.inf,0.0
+        length=random.uniform(0.1,0.35)
+    else:
+        turn=random.uniform(-DTHETA_MAX_RAD,DTHETA_MAX_RAD)
+        radius=random.uniform(R_MIN_M,R_MAX_M)
+        length=radius *abs(turn)
+    x,y,heading=pose_on_arc(n.X,radius,turn,length)
+    new_time=n.t + length/V_MAX_M_S
+    u=[V_MAX_M_S,radius,turn]
+    return Node([x,y,heading,new_time],n,u)
 
 # STUDENT TODO - Step 6: in_end_game_region(n, P_d) -> (True, u) if ONE
 # collision free circular arc takes node n to the goal position
@@ -311,7 +412,26 @@ def get_random_expansion(n):
 # arc passes through the goal. It must respect R_MIN_M. Derive its radius
 # and heading change, and explain them in your report.
 def in_end_game_region(n, P_d):
-    pass  # TODO: replace this with your implementation
+    DX=P_d[0]-n.X[0]
+    DY=P_d[1]-n.X[1]
+    c,s=math.cos(n.X[2]),math.sin(n.X[2])
+    dx=c*DX+s*DY
+    dy=-s*DX+c*DY
+    if dx <= 0:
+        return False, None
+    if abs(dy)<1e-7:
+        radius,turn,length=math.inf,0.0,dx
+    else:
+        radius=(dx**2+dy**2)/(2*abs(dy))
+        turn=2*math.atan2(dy,dx)
+        length=radius*abs(turn)
+        if radius<R_MIN_M:
+            return False, None
+
+    u=[V_MAX_M_S,radius,turn]
+    heading=wrap_angle(n.X[2]+turn)
+    end=Node([P_d[0],P_d[1],heading,n.t+length/V_MAX_M_S],n,u)
+    return (False,None) if in_collision(n,end) else (True,u)
 
 
 # STUDENT TODO - Step 7: sq_prm_planner(X_0, P_d)
@@ -325,9 +445,48 @@ def in_end_game_region(n, P_d):
 # end game region. Build T by following the parents back to the root.
 # Store the road map of each call in the global LAST_PRM (the GUI draws it).
 def sq_prm_planner(X_0, P_d):
-    pass  # TODO: replace this with your implementation
+    global LAST_PRM
 
+    prm=PRM()
+    LAST_PRM=prm
 
+    if point_in_collision(X_0[0],X_0[1]):
+        return None
+    if point_in_collision(P_d[0],P_d[1]):
+        return None
+
+    root=Node(X_0,None,None)
+    prm.add(root)
+
+    def try_finish(node):
+        possible,u=in_end_game_region(node,P_d)
+        if not possible:
+            return None
+        _,radius,turn=u
+        distance=(math.hypot(P_d[0]-node.X[0],P_d[1]-node.X[1]) if radius==math.inf else radius*abs(turn))
+
+        return Node([P_d[0],P_d[1],wrap_angle(node.X[2]+turn), node.t+distance/V_MAX_M_S],node,u)
+
+    goal=try_finish(root)
+    if goal is not None:
+        return [root.X,goal.X]
+    for _ in range(MAX_EXPANSIONS):
+        parent=get_random_node(prm)
+        child=get_random_expansion(parent)
+        if in_collision(parent,child):
+            continue
+        prm.add(child)
+        goal=try_finish(child)
+        if goal is not None:
+            nodes=[]
+            n=goal
+            while n is not None:
+                nodes.append(n.X)
+                n=n.parent
+            return nodes[::-1]
+    return None
+
+    
 # PROVIDED - example unit test: empty map, from (0, 0) heading +x to
 # (1.5, 1.5). One arc (a quarter circle, r = 1.5 m) reaches the goal from
 # the root: T has only 2 states.
@@ -350,18 +509,41 @@ def prm_unit_test_1():
 #      which cannot turn on the spot. Its duration must be longer than the
 #      straight line at V_MAX_M_S.
 def prm_unit_test_2():
-    pass  # TODO: replace this with your implementation
+    """A circle blocks the direct route, so we need intermediate arcs."""
+    load_map("circles_sim")
+    X_0, P_d = [0.0, 0.0, 0.0, 0.0], [1.5, 0.0]
+    T = get_best_trajectory(X_0, P_d, 0.25)
+    ok, msg = check_trajectory(T, X_0, P_d)
+    if not ok:
+        print("    test 2:", msg)
+    return ok and len(T or []) > 2, T, "circles_sim"
+
 
 
 def prm_unit_test_3():
-    pass  # TODO: replace this with your implementation
-
+    """A target slightly behind the start requires a longer curved route."""
+    load_map("empty")
+    X_0, P_d = [0.0, 0.0, 0.0, 0.0], [-0.05, 1.0]
+    T = get_best_trajectory(X_0, P_d, 0.25)
+    ok, msg = check_trajectory(T, X_0, P_d)
+    straight_time = math.hypot(P_d[0] - X_0[0], P_d[1] - X_0[1]) / V_MAX_M_S
+    if not ok:
+        print("    test 3:", msg)
+    return ok and trajectory_duration(T) > straight_time, T, "empty"
 
 # STUDENT TODO: run the 3 tests, print how many pass out of 3, and plot each
 # trajectory with its tree (plot_panels, provided at the end of the file).
 def run_prm_unit_tests(plot=True):
-    pass  # TODO: replace this with your implementation
-
+    results = []
+    passed_count = 0
+    for i, test in enumerate((prm_unit_test_1, prm_unit_test_2, prm_unit_test_3), 1):
+        passed, T, name = test()
+        print(f"  test {i}: {'pass' if passed else 'FAIL'}")
+        passed_count += passed
+        results.append((f"PRM test {i}", name, T, list(LAST_PRM.nodes)))
+    print(f"  {passed_count} / 3 passed")
+    if plot:
+        plot_panels(results)
 
 # =====================================================================
 # PART 3 - SIMPLE OPTIMIZATION
@@ -370,8 +552,40 @@ def run_prm_unit_tests(plot=True):
 #   Calls sq_prm_planner as many times as it can within t_plan seconds (at
 #   least once), and returns the trajectory with the shortest duration
 #   (trajectory_duration), or None if no call found one.
+
 def get_best_trajectory(X_0, P_d, t_plan):
-    pass  # TODO: replace this with your implementation
+    # If no planning time is provided,
+    # run the planner only once.
+    if t_plan <= 0:
+        return sq_prm_planner(X_0, P_d)
+
+    best = None
+    best_duration = math.inf
+
+    # Record when planning started.
+    start_time = time.perf_counter()
+
+    # Keep searching while time remains.
+    while time.perf_counter() - start_time < t_plan:
+
+        # Generate one possible trajectory.
+        T = sq_prm_planner(X_0, P_d)
+
+        # Ignore attempts that failed.
+        if T is None:
+            continue
+
+        # Determine how long the robot would
+        # take to follow this trajectory.
+        duration = trajectory_duration(T)
+
+        # Keep the fastest trajectory found.
+        if duration < best_duration:
+            best = T
+            best_duration = duration
+
+    return best
+
 
 
 # PROVIDED - compares one sq_prm_planner call with get_best_trajectory.
@@ -409,7 +623,12 @@ TRAJ_LOOKAHEAD_S = 1.0          # s, the Delta t of Lecture 06A (you may tune it
 #        (the last pose of T if the trajectory is over)
 #     3. return point_tracking_controller(p_des,t, X)
 def trajectory_tracking_controller(T, X, t):
-    pass  # TODO: replace this with your implementation
+    if not T:
+        return 0.0, 0.0
+    target_time=t+TRAJ_LOOKAHEAD_S
+    desired=next((state for state in T if state[3]>=target_time),T[-1])
+
+    return point_tracking_controller(desired[:3],X[:3])
 
 
 # PROVIDED - simulates the robot following a trajectory.
@@ -451,14 +670,33 @@ def traj_tracker_unit_test_1():
 # STUDENT TODO - Step 2: trajectory test 2, same as test 1 on the map
 # "gap_sim". Returns (passed, T, visited_poses, "gap_sim").
 def traj_tracker_unit_test_2():
-    pass  # TODO: replace this with your implementation
+    """Same tracking experiment on the student's narrow-gap map."""
+    load_map("gap_sim")
+    X_0, P_d = [0.0, 0.0, 0.0, 0.0], [1.5, 0.0]
+    T = get_best_trajectory(X_0, P_d, 0.5)
+    if not T:
+        print("  gap_sim: planner found no solution")
+        return False, [], [], "gap_sim"
+    reached, visited, t, error = simulate_trajectory(T, X_0)
+    collided = any(robot_in_collision(p) for p in visited)
+    print(f"  gap_sim: planned {trajectory_duration(T):.1f} s, "
+          f"took {t:.1f} s, max error {error:.3f} m, collision {collided}")
+    return reached and not collided, T, visited, "gap_sim"
 
 
 # STUDENT TODO: run the 2 tests, print how many pass out of 2, and plot each
 # planned trajectory with the poses visited (plot_panels).
 def run_traj_tracker_unit_tests(plot=True):
-    pass  # TODO: replace this with your implementation
-
+    results = []
+    passed_count = 0
+    for i, test in enumerate((traj_tracker_unit_test_1, traj_tracker_unit_test_2), 1):
+        passed, T, visited, name = test()
+        print(f"  test {i}: {'pass' if passed else 'FAIL'}")
+        passed_count += passed
+        results.append((f"Tracking test {i}", name, T, [], visited))
+    print(f"  {passed_count} / 2 passed")
+    if plot:
+        plot_panels(results)
 
 # =====================================================================
 # PART 6 - PLANNER ANALYSIS: TRAJECTORY DURATION VS PLANNING TIME
@@ -484,8 +722,29 @@ def random_free_position(clearance=C_SPACE_RADIUS_M):
 #   random_free_position). The robot cannot turn on the spot: leave it room
 #   at the start, and keep the goal away from the start.
 def make_random_plan_scene(n_obstacles, radius):
-    pass  # TODO: replace this with your implementation
+    circles=[]
+    margin=radius+C_SPACE_RADIUS_M+0.02
 
+    for _ in range(n_obstacles):
+        for attempt in range(1000):
+            x=random.uniform(map_5.X_MIN+margin,map_5.X_MAX-margin)
+            y=random.uniform(map_5.Y_MIN+margin,map_5.Y_MAX-margin)
+            if all(math.hypot(x-cx,y-cy)>=2*radius +0.05 for cx,cy,_ in circles):
+                circles.append((x,y,radius))
+                break
+            else:
+                raise ValueError("Could not place all obstacles without overlap.")
+
+    scene={"walls": list(map_5.BOUNDARY_WALLS),"circles":circles}
+    load_scene(scene)
+    for _ in range(1000):
+        start=random_free_position(C_SPACE_RADIUS_M+0.05)
+        goal=random_free_position(C_SPACE_RADIUS_M)
+        if start and goal and math.dist(start,goal)>=0.65:
+            scene["X_0"]=[start[0],start[1],random.uniform(-math.pi,math.pi),0.0]
+            scene["P_d"]=goal
+            return scene
+    raise ValueError("Could not find a valid start and goal position.")
 
 # STUDENT TODO - Step 2: run_planning_time_analysis(...)
 #   100 random scenes. For each scene, call get_best_trajectory for each
@@ -498,7 +757,44 @@ T_PLANS = [0.01, 0.05, 0.1, 0.2, 0.5, 1.0]
 
 
 def run_planning_time_analysis(n_obstacles=4, radius=0.15, n_scenes=100, plot=True):
-    pass  # TODO: replace this with your implementation
+    scenes = []
+    for i in range(n_scenes):
+        scene = make_random_plan_scene(n_obstacles, radius)
+        durations = []
+        for budget in T_PLANS:
+            load_scene(scene)
+            T = get_best_trajectory(scene["X_0"], scene["P_d"], budget)
+            durations.append(trajectory_duration(T) if T else None)
+        scenes.append(durations)
+        print(f"  scene {i+1}/{n_scenes} done")
+
+    solve_percent = [100 * sum(row[j] is not None for row in scenes) / n_scenes
+                     for j in range(len(T_PLANS))]
+    common = [row for row in scenes if all(d is not None for d in row)]
+    mean_durations = [sum(row[j] for row in common) / len(common)
+                      if common else math.nan
+                      for j in range(len(T_PLANS))]
+    print(f"  common solved scenes: {len(common)} / {n_scenes}")
+    for budget, duration, rate in zip(T_PLANS, mean_durations, solve_percent):
+        print(f"  t_plan={budget:.2f}s: common-scene mean={duration:.2f}s, "
+              f"solved={rate:.0f}%")
+
+    if plot:
+        import matplotlib.pyplot as plt
+        plt.figure()
+        plt.plot(T_PLANS, mean_durations, 'o-')
+        plt.xlabel('Allowed planning time (s)')
+        plt.ylabel('Mean trajectory duration (s), common solved scenes')
+        plt.tight_layout()
+        plt.show()
+        plt.figure()
+        plt.plot(T_PLANS, solve_percent, 'o-')
+        plt.xlabel('Allowed planning time (s)')
+        plt.ylabel('Scenes solved (%)')
+        plt.ylim(0, 100)
+        plt.tight_layout()
+        plt.show()
+    return mean_durations, solve_percent
 
 
 # =====================================================================
@@ -563,3 +859,7 @@ if __name__ == "__main__":
     run_traj_tracker_unit_tests()
     # print("\n=== Part 6: planning time analysis ===")   # slow: run it once for your report
     # run_planning_time_analysis()
+
+
+
+
