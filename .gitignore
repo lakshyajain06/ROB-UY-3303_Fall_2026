@@ -1,2 +1,4 @@
 # Robot experiment recordings
 *.csv
+
+*/__pycache__
