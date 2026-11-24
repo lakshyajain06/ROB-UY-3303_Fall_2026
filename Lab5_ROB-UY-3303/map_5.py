@@ -88,7 +88,46 @@ MAPS = {
         "lidar_sees_obstacles": True,
     },
     # STUDENT TODO: add your own maps here (2 for simulation, 2 for the robot).
+        "custom_sim_1": {
+        "walls": BOUNDARY_WALLS,
+        "circles": [
+            (0.65, 0.00, 0.15),
+            (1.15, 0.90, 0.18),
+            (0.35, 1.20, 0.15),
+        ],
+        "lidar_sees_obstacles": True,
+    },
+        "custom_sim_2": {
+        "walls": BOUNDARY_WALLS,
+        "circles": [
+            (0.48, 0.30, 0.15),
+            (0.94, 0.90, 0.20),
+            (1.35, 0.56, 0.16),
+        ],
+        "lidar_sees_obstacles": True,
+    },
+      "custom_robot_1": {
+        "walls": BOUNDARY_WALLS,
+        "circles": [
+            (0.05, 0.4, 0.03175),
+            (0.35, 0.4, 0.03175),
+            (0.85, 0.4, 0.03175),
+        ],
+        "lidar_sees_obstacles": True,
+    },
+        "custom_robot_2": {
+        "walls": BOUNDARY_WALLS,
+        "circles": [
+            (0.5, 0.0, 0.03175),
+            (0.7, 0.3, 0.03175),
+            (1.0, 0.5, 0.03175),
+            (0.6, 0.7, 0.03175),
+        ],
+        "lidar_sees_obstacles": True,
+    },
 }
+
+
 
 ACTIVE_MAP = "circles_sim"          # map loaded when the GUI starts
 
